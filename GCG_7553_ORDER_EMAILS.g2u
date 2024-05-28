@@ -1,0 +1,432 @@
+﻿Program.Sub.ScreenSU.Start
+Gui.Form..Create(BaseForm)
+Gui.Form..Caption("Form")
+Gui.Form..Size(474,285)
+Gui.Form..MinX(0)
+Gui.Form..MinY(0)
+Gui.Form..Position(0,0)
+Gui.Form..AlwaysOnTop(False)
+Gui.Form..FontName("Tahoma")
+Gui.Form..FontSize(8.25)
+Gui.Form..ControlBox(True)
+Gui.Form..MaxButton(True)
+Gui.Form..MinButton(True)
+Gui.Form..MousePointer(0)
+Gui.Form..Moveable(True)
+Gui.Form..Sizeable(True)
+Gui.Form..ShowInTaskBar(True)
+Gui.Form..TitleBar(True)
+Gui.Form.GSGCMain.Create(GsGridControl)
+Gui.Form.GSGCMain.Enabled(True)
+Gui.Form.GSGCMain.Visible(True)
+Gui.Form.GSGCMain.Zorder(0)
+Gui.Form.GSGCMain.Size(471,250)
+Gui.Form.GSGCMain.Position(2,2)
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+Function.Intrinsic.UI.UsePixels ' Allows you to use Pixels instead of Twips throughout
+
+F.Intrinsic.Control.SelectCase(V.Caller.Hook)
+	
+	'Order Header screen populate hook
+	F.Intrinsic.Control.Case(11560)
+		'Diplay custom text box 
+		F.Intrinsic.UI.ChangeCallerProperty(V.Passed.GAB-LBL-1, "HIDE", 0)
+		V.Passed.GAB-LBL-1.Set("Invoice Recipient(s)")
+		F.Intrinsic.Variable.SetProperty("GAB-LBL-1", "PL", 490)
+		F.Intrinsic.Variable.SetProperty("GAB-LBL-1", "PT", 529)
+		F.Intrinsic.Variable.SetProperty("GAB-LBL-1", "PW", 100)
+		F.Intrinsic.Variable.SetProperty("GAB-LBL-1", "PH", 14)
+		'Display custom label
+		F.Intrinsic.UI.ChangeCallerProperty(V.Passed.GAB-TEXT-1, "HIDE", 0)
+'		F.Intrinsic.UI.ChangeCallerProperty(V.Passed.GAB-TEXT-1, "LOCK", 0)
+		F.Intrinsic.Variable.SetProperty("GAB-TEXT-1", "PL", 490)
+		F.Intrinsic.Variable.SetProperty("GAB-TEXT-1", "PT", 543)
+		F.Intrinsic.Variable.SetProperty("GAB-TEXT-1", "PW", 4000)
+	
+	'Order Header post save hook
+	F.Intrinsic.Control.Case(11872)
+		'Check for GCG_7553_ORDER_RECIPIENTS table
+		F.Intrinsic.Control.CallSub(CheckTable)
+		'Save recipients input
+		F.Intrinsic.Control.If(V.Passed.GAB-TEXT-1, =, "")
+			'Check for recipients deletion
+			F.Intrinsic.Control.CallSub(ClearRecipients)
+			
+		F.Intrinsic.Control.Else
+			'Validate emails
+			F.Intrinsic.Control.CallSub(ValidateEmails)
+			F.Intrinsic.Control.CallSub(SaveRecipients)
+			'Save recipients to table
+		F.Intrinsic.Control.EndIf
+		
+	'Order change/selected on Order Header screen
+	F.Intrinsic.Control.Case(11565)
+		'Clear custom field
+		V.Passed.GAB-TEXT-1.Set("")
+		F.Intrinsic.Control.CallSub(CheckTable)
+		'Ensure order is selected
+		F.Intrinsic.Control.If(V.Passed.000003, !=, "")
+			F.Intrinsic.Control.CallSub(PopulateRecipients)
+			F.Intrinsic.UI.ChangeCallerProperty(V.Passed.GAB-TEXT-1, "LOCK", 0)	
+		F.Intrinsic.Control.EndIf
+		
+	F.Intrinsic.Control.Case(15226)
+		'Capture all orders contained in updated invoices
+		F.Intrinsic.Control.CallSub(CaptureOrders)
+		
+		
+F.Intrinsic.Control.EndSelect
+
+Program.Sub.Main.End
+
+Program.Sub.CaptureOrders.Start
+	V.Local.sSql.Declare(String)
+	V.Local.sRowRet.Declare(String)
+	V.Local.iRowCount.Declare(Long)
+	V.Local.iCount.Declare(Long)
+	V.Local.sInvoice.Declare(String)
+	V.Local.sOrderNo.Declare(String)
+	V.Local.sCustomerNo.Declare(String)
+	V.Local.sRetEmails.Declare(String)
+	
+	F.ODBC.Connection!con.OpenCompanyConnection
+	
+	'Create table to hold all invoices, order numbers, and customers
+	F.Data.DataTable.Create("dtInvoiceOrders", True)
+	F.Data.DataTable.AddColumn("dtInvoiceOrders", "INVOICE", "String")
+	F.Data.DataTable.AddColumn("dtInvoiceOrders", "ORDER_NO", "String")
+	F.Data.DataTable.AddColumn("dtInvoiceOrders", "CUSTOMER", "String")
+	F.Data.DataTable.AddColumn("dtInvoiceOrders", "RECIPIENTS", "String")
+	F.Data.DataTable.AddColumn("dtInvoiceOrders", "RECIPIENT_CRM", "String")
+	F.Data.DataTable.AddColumn("dtInvoiceOrders", "TRACKING_NO", "String")
+	F.Data.DataTable.AddColumn("dtInvoiceOrders", "CARRIER", "String")
+	F.Data.DataTable.AddColumn("dtInvoiceOrders", "CUST_PO", "String")
+	
+	'Load invoices BDF and determine row count
+	F.Intrinsic.BDF.Load("bdfInvoices", "AUX001")
+	F.Intrinsic.BDF.ReadRowCount("bdfInvoices", V.Local.iRowCount)
+	F.Intrinsic.Math.Sub(V.Local.iRowCount, 1, V.Local.iRowCount)
+	
+	'Check for records in BDF
+	F.Intrinsic.Control.If(V.Local.iRowCount, >=, 0)
+		'Loop BDF to capture data and fill datatable
+		F.Intrinsic.Control.For(V.Local.iCount, 0, V.Local.iRowCount, 1)
+			F.Intrinsic.BDF.TextMatrix("bdfInvoices", 0, V.Local.iCount, V.Local.sInvoice)
+			F.Intrinsic.BDF.TextMatrix("bdfInvoices", 1, V.Local.iCount, V.Local.sCustomerNo)
+			
+			F.Data.DataTable.AddRow("dtInvoiceOrders", "INVOICE", V.Local.sInvoice.Trim, "CUSTOMER", V.Local.sCustomerNo.Trim)
+			
+		F.Intrinsic.Control.Next(V.Local.iCount)
+	F.Intrinsic.Control.EndIf
+	
+	'Fill in order numbers 
+	F.Data.Dictionary.CreateFromSQL("dictOrders", "con", "Select RTRIM(INVOICE) INVOICE, ORDER_NO from V_ORDER_HIST_HEAD")
+	F.Data.Dictionary.SetDefaultReturn("dictOrders", "")
+	F.Data.DataTable.FillFromDictionary("dtInvoiceOrders", "dictOrders", "INVOICE", "ORDER_NO")
+	F.Data.Dictionary.Close("dictOrders")
+	
+	'Fill in customer PO
+	F.Data.Dictionary.CreateFromSQL("dictPO", "con", "Select RTRIM(INVOICE) INVOICE, CUSTOMER_PO from V_ORDER_HIST_HEAD")
+	F.Data.Dictionary.SetDefaultReturn("dictPO", "")
+	F.Data.DataTable.FillFromDictionary("dtInvoiceOrders", "dictPO", "INVOICE", "CUST_PO")
+	F.Data.Dictionary.Close("dictPO")
+	
+	'Fill in tracking number
+	F.Data.Dictionary.CreateFromSQL("dictTrack", "con", "Select RTRIM(INVOICE) INVOICE, TRACKING_NO from V_SHIPMENT_HEADER")
+	F.Data.Dictionary.SetDefaultReturn("dictTrack", "")
+	F.Data.DataTable.FillFromDictionary("dtInvoiceOrders", "dictTrack", "INVOICE", "TRACKING_NO")
+	F.Data.Dictionary.Close("dictTrack")
+	
+	'Fill in carrier code
+	F.Data.Dictionary.CreateFromSQL("dictCarrier", "con", "Select RTRIM(INVOICE) INVOICE, CARRIER_CD from V_SHIPMENT_HEADER")
+	F.Data.Dictionary.SetDefaultReturn("dictCarrier", "")
+	F.Data.DataTable.FillFromDictionary("dtInvoiceOrders", "dictCarrier", "INVOICE", "CARRIER")
+	F.Data.Dictionary.Close("dictCarrier")
+	
+	'Fill in any recipients saved via order header screen
+	F.Data.Dictionary.CreateFromSQL("dictRecipients", "con", "Select ORDER_NO, RECIPIENTS from GCG_7553_ORD_RECV")
+	F.Data.Dictionary.SetDefaultReturn("dictRecipients", "")
+	F.Data.DataTable.FillFromDictionary("dtInvoiceOrders", "dictRecipients", "ORDER_NO", "RECIPIENTS")
+	F.Data.Dictionary.Close("dictRecipients")
+	
+	'Loop table to populate recipients flagged for invoice email via CRM
+	F.Intrinsic.Control.For(V.Local.iCount, 0, V.Datatable.dtInvoiceOrders.RowCount--, 1)
+		'Check for any contact emails flagged for invoice email with "EMAILINVOICE" on Field 16 of CRM notes
+		F.Intrinsic.String.Build("select x.EMAIL1 from V_CONTACT as x left join CRM_UF_VALUE as y on x.CUST = y.COMPID and x.ALT_ID = y.CID where y.TYPE = '12' and x.CUST = '{0}' and y.UF16 = 'EMAILINVOICE'", V.DataTable.dtInvoiceOrders(V.Local.iCount).CUSTOMER!FieldValTrim, V.Local.sSQL)
+		F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSql, V.Local.sRetEmails)
+		
+		F.Intrinsic.Control.If(V.Ambient.ExecuteAndReturnEOF, =, False)
+			F.Intrinsic.String.Replace(V.Local.sRetEmails, "#$#", ";", V.Local.sRetEmails)
+			F.Intrinsic.String.Concat(V.DataTable.dtInvoiceOrders(V.Local.iCount).RECIPIENTS!FieldValTrim, ";", V.Local.sRetEmails.Trim, V.Local.sRetEmails)
+			F.Data.DataTable.SetValue("dtInvoiceOrders", V.Local.iCount, "RECIPIENTS", V.Local.sRetEmails)
+		F.Intrinsic.Control.EndIf
+		
+	F.Intrinsic.Control.Next(V.Local.iCount)
+	
+	F.Intrinsic.Control.CallSub(GenerateEmails)
+	
+Program.Sub.CaptureOrders.End
+
+Program.Sub.GenerateEmails.Start
+	V.Local.iCount.Declare(Long)
+	V.Local.iUserID.Declare(Long)
+	V.Local.sDate.Declare(String)
+	V.Local.sTrackingEmbed.Declare(String)
+	V.Local.sFilePath.Declare(String)
+	V.Local.sTimeStamp.Declare(String)
+	V.Local.sHTML_PO.Declare(String)
+	V.Local.sHTML_Header.Declare(String)
+	V.Local.sHTML_Footer.Declare(String)
+	V.Local.sHTML_Table.Declare(String)
+	V.Local.sHTML_Final.Declare(String)
+	V.Local.sRecipients.Declare(String)
+	
+	'Generate file path and name to hold html table
+	
+	
+	'Generate HTML header section
+	F.Intrinsic.String.Build("<html><body style={0}background-color:#808080;{0}><style>div {width: 120px;height: 100px;padding: 5px;margin: 0;}</style><center><h2>Thanks for you purchase!</h2><p>Golight, Inc<br>37146 Old Hwy 17<br>Culbertson, NE 69032<br>800.577.0098</p></center></div></body></html>", V.Ambient.DblQuote, V.Local.sHTML_Header)
+	'Generate HTML footer
+	v.Local.sHTML_Footer.Set("<center>(Please note: Tracking numbers may not be valid until the shipment is picked up by the carrier.)<br><h3>www.golight.com</h3></center>")
+	
+	'Format date
+	F.Intrinsic.String.Format(V.Ambient.Date, "Mmm D, YYYY", V.Local.sDate)
+	
+	'Get user ID
+	F.Global.Security.GetUserID(V.Caller.User, V.Caller.CompanyCode, V.Local.iUserID)
+	
+	'Create gridview to hold html table
+	F.Intrinsic.Control.CallSub(GenerateEmailBodyTable)
+
+	'Loop table to generate and send email for each invoice
+	F.Intrinsic.Control.For(V.Local.iCount, 0, V.DataTable.dtInvoiceOrders.RowCount--, 1)
+		'Buil PO# message
+		f.Intrinsic.String.Build("<h1>Tracking information for PO #{0}</h1>", V.DataTable.dtInvoiceOrders(V.Local.iCount).CUST_PO!FieldValTrim, V.Local.sHTML_PO)
+		
+		'Build tracking number hyperlink
+		F.Intrinsic.String.Build("<a href={0}https://www.google.com/search?q={1}{0}>{1}</a>", V.Ambient.DblQuote, V.DataTable.dtInvoiceOrders(V.Local.iCount).TRACKING_NO!FieldValTrim, V.Local.sTrackingEmbed)
+		
+		'Add line to table
+		F.Data.DataTable.AddRow("dtShipmentData", "PROVIDER", V.DataTable.dtInvoiceOrders(V.Local.iCount).CARRIER!FieldValTrim, "TRACKING_NO", V.Local.sTrackingEmbed, "DATE", V.Local.sDate)
+		
+		'Format time stampt to be valid in windows file path name
+		F.Intrinsic.String.Replace(V.Ambient.Now, ":", "", V.Local.sTimeStamp)
+		F.Intrinsic.String.Replace(V.Local.sTimeStamp, "/", "", V.Local.sTimeStamp)
+		F.Intrinsic.String.Replace(V.Local.sTimeStamp, " ", "", V.Local.sTimeStamp)
+		'Generate file path to export html into
+		F.Intrinsic.String.Build("{0}\INVOICE_HTML_{1}.html", V.Caller.TempDir, V.Local.sTimeStamp, V.Local.sFilePath)
+		
+		'Export grid to html file and read html text back as string
+		F.Data.Datatable.ExportHTML("dtShipmentData", "PROVIDER!TRACKING_NO!DATE", "Provider!Tracking No!Date", "", False, V.Local.sHTML_Table )
+'		GUI.Form.GSGCMain.Export(V.Local.sFilePath, "html")
+'		F.Intrinsic.File.File2String(V.Local.sFilePath, V.Local.sHTML_Table)
+		Function.Intrinsic.Debug.InvokeDebugger
+		Function.Intrinsic.Debug.Stop
+		
+		'Export function to HTML replaces some characters with placeholders need to revert these as they do not work when passed into an HTML table cell as a hypelink.
+		F.Intrinsic.String.Replace(V.Local.sHTML_Table, "&lt;", "<", V.Local.sHTML_Table)
+		F.Intrinsic.String.Replace(V.Local.sHTML_Table, "&quot;", V.Ambient.DblQuote, V.Local.sHTML_Table)
+		F.Intrinsic.String.Replace(V.Local.sHTML_Table, "&gt;", ">", V.Local.sHTML_Table)
+		F.Intrinsic.String.Replace(V.Local.sHTML_Table, "&nbsp;", " ", V.Local.sHTML_Table)
+		
+		'Concatenate all parts of html body
+		F.Intrinsic.String.Build("{0}<br>{1}<br>{2}<br>{3}", V.Local.sHTML_Header, V.Local.sHTML_PO, V.Local.sHTML_Table, V.Local.sHTML_Footer, V.Local.sHTML_Final)
+		
+		'Format recipients for queue message
+		F.Intrinsic.String.Replace(V.DataTable.dtInvoiceOrders(V.Local.iCount).RECIPIENTS!FieldValTrim, ";", "@!@", V.Local.sRecipients)
+		
+		Function.Intrinsic.Debug.InvokeDebugger
+		Function.Intrinsic.Debug.Stop
+		
+		'Queue courier email
+		F.Global.Messaging.QueueMessage(V.Caller.CompanyCode, V.Local.iUserID, "Automated Invoice Tracking", "Order Invoice", "atudon@gssmail.com", V.Local.sRecipients, "", 5, "atudon@gssmail.com", False, "", "", "", "", "", "", "", "", False, V.Local.sHTML_Final)
+		
+		'Clear table for next pass
+		F.Data.DataTable.DeleteRow("dtShipmentData", -1)
+		
+	F.Intrinsic.Control.Next(V.Local.iCount)
+	
+
+Program.Sub.GenerateEmails.End
+
+Program.Sub.GenerateEmailBodyTable.Start
+	
+	V.Local.sFieldNames.Declare(String)
+	V.Local.iCount.Declare(Long)
+	
+	'Generate table for shipment data
+	F.Data.DataTable.Create("dtShipmentData", True)
+	F.Data.DataTable.AddColumn("dtShipmentData", "PROVIDER", "String")
+	F.Data.DataTable.AddColumn("dtShipmentData", "TRACKING_NO", "String")
+	F.Data.DataTable.AddColumn("dtShipmentData", "DATE", "String")
+	
+	GUI.Form.GSGCMain.AddGridviewFromDatatable("gvShipmentData", "dtShipmentData")
+	GUI.Form.GSGCMain.MainView("gvShipmentData")
+	
+	GUI.Form.GSGCMain.SetColumnProperty("gvShipmentData", "PROVIDER", "HeaderFontBold", True)
+	GUI.Form.GSGCMain.SetColumnProperty("gvShipmentData", "TRACKING_NO", "HeaderFontBold", True)
+	GUI.Form.GSGCMain.SetColumnProperty("gvShipmentData", "DATE", "HeaderFontBold", True)
+	
+	GUI.Form.GSGCMain.SetColumnProperty("gvShipmentData", "PROVIDER", "Caption", "Provider")
+	GUI.Form.GSGCMain.SetColumnProperty("gvShipmentData", "TRACKING_NO", "Caption", "Tracking Number")
+	GUI.Form.GSGCMain.SetColumnProperty("gvShipmentData", "DATE", "Caption", "Date")
+	
+	GUI.Form.GSGCMain.SetColumnProperty("gvShipmentData", "PROVIDER", "Width", 200)
+	GUI.Form.GSGCMain.SetColumnProperty("gvShipmentData", "TRACKING_NO", "Width", 1150)
+	GUI.Form.GSGCMain.SetColumnProperty("gvShipmentData", "DATE", "Width", 200)
+	
+Program.Sub.GenerateEmailBodyTable.End
+
+Program.Sub.ClearRecipients.Start
+	V.Local.sRet.Declare(String)
+	V.Local.sSql.Declare(String)
+	V.Local.sOrderNum.Declare(String)
+	
+	F.ODBC.Connection!con.OpenCompanyConnection
+	
+	'Capture recipients if any
+	F.Intrinsic.Control.CallSub(CaptureRecipients)
+	
+	'If no record exist end program
+	F.Intrinsic.Control.If(V.Args.Recipients, =, "***NONE***")
+		F.Intrinsic.Control.End
+		
+	F.Intrinsic.Control.Else
+		F.Intrinsic.UI.Msgbox("Are you sure you want to delete the invoice recipients for this order?", "Delete", 4, V.Local.sRet)
+		F.Intrinsic.Control.If(V.Local.sRet, = , V.Ambient.MsgBoxYes)
+			'Capture order number and pad to 7 chars with leading zeros if needed
+			F.Intrinsic.String.LPad(V.Passed.000003, "0", 7, V.Local.sOrderNum)
+			'Delete record from GCG_7553_ORD_RECV table
+			F.Intrinsic.String.Build("Delete from GCG_7553_ORD_RECV where ORDER_NO = '{0}'", V.Local.sOrderNum, V.Local.sSql)
+			F.ODBC.Connection!con.Execute(V.Local.sSql)
+				
+		F.Intrinsic.Control.Else
+			F.Intrinsic.Control.End
+				
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.EndIf
+	
+	F.ODBC.Connection!con.Close
+
+Program.Sub.ClearRecipients.End
+
+Program.Sub.PopulateRecipients.Start
+	V.Local.sRet.Declare(String)
+	V.Local.sSql.Declare(String)
+	V.Local.sOrderNum.Declare(String)
+	
+	F.ODBC.Connection!con.OpenCompanyConnection
+
+	'Format order number to 7 chars with leading zeros if needed
+	F.Intrinsic.String.LPad(V.Passed.000003, "0", 7, V.Local.sOrderNum)
+	
+	F.Intrinsic.String.Build("Select RECIPIENTS from GCG_7553_ORD_RECV where ORDER_NO = '{0}'", V.Local.sOrderNum, V.Local.sSql)
+	F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSql, V.Local.sRet)
+	
+	F.Intrinsic.Control.If(V.Ambient.ExecuteAndReturnEOF, =, False)
+		V.Passed.GAB-TEXT-1.Set(V.Local.sRet.Trim)
+	F.Intrinsic.Control.EndIf
+	
+	F.ODBC.Connection!con.Close
+	
+Program.Sub.PopulateRecipients.End
+
+Program.Sub.SaveRecipients.Start
+	V.Local.sOrderNum.Declare(String)
+	V.Local.sRet.Declare(String)
+	V.Local.sSql.Declare(String)
+	
+	F.ODBC.Connection!con.OpenCompanyConnection
+	
+	'Capture order number and pad to 7 chars with leading zeros if needed
+	F.Intrinsic.String.LPad(V.Passed.000003, "0", 7, V.Local.sOrderNum)
+	
+	'Check for order in GCG_7553_ORD_RECV
+	F.Intrinsic.String.Build("Select RECIPIENTS from GCG_7553_ORD_RECV where ORDER_NO = '{0}'", V.Local.sOrderNum, V.Local.sSql)
+	F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSql, V.Local.sRet)
+	
+	'If order does not exist in table insert new record, otherwise update current one
+	F.Intrinsic.Control.If(V.Ambient.ExecuteAndReturnEOF, =, True)
+		F.Intrinsic.String.Build("Insert into GCG_7553_ORD_RECV values ('{0}', '{1}')", V.Local.sOrderNum, V.Passed.GAB-TEXT-1, V.Local.sSql)
+		F.ODBC.Connection!con.Execute(V.Local.sSql)
+		
+	F.Intrinsic.Control.Else
+		'If no changes were made end program
+		F.Intrinsic.Control.If(V.Local.sRet, =, V.Passed.GAB-TEXT-1)
+			F.Intrinsic.Control.End
+		F.Intrinsic.Control.EndIf
+		
+		F.Intrinsic.String.Build("Update GCG_7553_ORD_RECV set RECIPIENTS = '{0}' where ORDER_NO = '{1}'", V.Passed.GAB-TEXT-1, V.Local.sOrderNum, V.Local.sSql)
+		F.ODBC.Connection!con.Execute(V.Local.sSql)
+		
+	F.Intrinsic.Control.EndIf
+	
+	F.ODBC.Connection!con.Close
+	
+Program.Sub.SaveRecipients.End
+
+Program.Sub.ValidateEmails.Start
+	V.Local.sEmails.Declare(String)
+	V.Local.sMsg.Declare(String)
+	V.Local.bRet.Declare(Boolean)
+	V.Local.iCnt.Declare(Long)
+	
+	'Capture emails address' and split in case of multiples
+	F.Intrinsic.String.Split(V.Passed.GAB-TEXT-1, ";", V.Local.sEmails)
+	'Validate email(s)
+	F.Intrinsic.Control.For(V.Local.iCnt, 0, V.Local.sEmails.UBound, 1)
+		F.Global.Messaging.IsAddressValid(V.Local.sEmails(V.Local.iCnt), V.Local.bRet)
+		'If address is invalid display message and end
+		F.Intrinsic.Control.If(V.Local.bRet, =, False)
+			F.Intrinsic.String.Build("Email address {0} is invalid, please correct and save order again. (Ensure multiple emails are separated by ';')", V.Local.sEmails(V.Local.iCnt), V.Local.sMsg)
+			F.Intrinsic.UI.Msgbox(V.Local.sMsg, "Invalid Email")
+			F.Intrinsic.Control.End
+		F.Intrinsic.Control.EndIf
+		
+	F.Intrinsic.Control.Next(V.Local.iCnt)
+
+Program.Sub.ValidateEmails.End
+
+Program.Sub.CheckTable.Start
+	V.Local.bRet.Declare(Boolean)
+	
+	F.ODBC.Connection!con.OpenCompanyConnection
+	
+	F.ODBC.Connection!con.TableExists("GCG_7553_ORD_RECV",V.Local.bRet)
+	
+	F.Intrinsic.Control.If(V.Local.bRet,=,False)
+		F.ODBC.Connection!con.Execute("CREATE TABLE GCG_7553_ORD_RECV (ORDER_NO CHAR(7), RECIPIENTS CHAR(250))")
+	F.Intrinsic.Control.EndIf
+	
+	F.ODBC.Connection!con.Close
+
+Program.Sub.CheckTable.End
+
+Program.Sub.CaptureRecipients.Start
+	V.Local.sOrderNum.Declare(String)
+	V.Local.sRet.Declare(String)
+	V.Local.sSql.Declare(String)
+	
+	'Capture order number and pad to 7 chars with leading zeros if needed
+	F.Intrinsic.String.LPad(V.Passed.000003, "0", 7, V.Local.sOrderNum)
+	
+	'Check for order in GCG_7553_ORD_RECV
+	F.Intrinsic.String.Build("Select RECIPIENTS from GCG_7553_ORD_RECV where ORDER_NO = '{0}'", V.Local.sOrderNum, V.Local.sSql)
+	F.ODBC.Connection!con.ExecuteAndReturn(V.Local.sSql, V.Local.sRet)
+	F.Intrinsic.Control.If(V.Ambient.ExecuteAndReturnEOF, =, False)
+		F.Intrinsic.Variable.AddRV("Recipients", V.Local.sRet)
+	F.Intrinsic.Control.Else
+		F.Intrinsic.Variable.AddRV("Recipients", "***NONE***")
+	F.Intrinsic.Control.EndIf
+	
+Program.Sub.CaptureRecipients.End
+
+Program.Sub.Comments.Start
+${$5$}$20.1.8286.22461$}$1
+${$6$}$Angel$}$20240521192900661$}$KXl0r/FkrMYwb/r4ukQ87f+Hs/x2T/urMeBd0UIhIiHZMlgaZCaGphKXNuw6iKUHOp1O6vAEVKI=
+Program.Sub.Comments.End
